@@ -119,6 +119,10 @@ def db_insert_route(route: dict) -> None:
         "distance_km":      route["distance_km"],
         "origin":           route.get("origin", ""),
         "destination":      route.get("destination", ""),
+        "origin_lat":       route.get("origin_lat", None),
+        "origin_lng":       route.get("origin_lng", None),
+        "dest_lat":         route.get("dest_lat", None),
+        "dest_lng":         route.get("dest_lng", None),
         "difficulty_score": route.get("difficulty_score", 0.0),
         "assigned_to":      route.get("assigned_to", None),
     })
