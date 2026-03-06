@@ -1002,6 +1002,23 @@ async function geocode(query) {
   return { lat: +data[0].lat, lng: +data[0].lon, label: data[0].display_name };
 }
 
+// ── OSRM road routing (free public server, no key) ─────────
+// Returns actual road-following GeoJSON coordinates
+async function getRoadRoute(originGeo, destGeo) {
+  const url = `https://router.project-osrm.org/route/v1/driving/` +
+    `${originGeo.lng},${originGeo.lat};${destGeo.lng},${destGeo.lat}` +
+    `?overview=full&geometries=geojson&steps=false`;
+  const res = await fetch(url);
+  const data = await res.json();
+  if (data.code !== 'Ok' || !data.routes?.length) return null;
+  const route = data.routes[0];
+  return {
+    coords: route.geometry.coordinates,   // [[lng,lat], …] road-snapped
+    distance: route.distance,             // metres
+    duration: route.duration              // seconds
+  };
+}
+
 // ── SVG marker factory ─────────────────────────────────────
 function makeSVGMarker(color, pulse = false) {
   const el = document.createElement('div');
@@ -1095,57 +1112,76 @@ async function _drawPreviewRoute(origin, dest) {
   previewMarkers = [];
 
   try {
-    const results = await Promise.all([
+    setMapStatus('Geocoding locations…', 'loading');
+    const [oGeo, dGeo] = await Promise.all([
       origin ? geocode(origin) : null,
       dest   ? geocode(dest)   : null
     ]);
-    const [oGeo, dGeo] = results;
 
-    const coords = [];
+    const endpointCoords = [];
 
     if (oGeo) {
-      coords.push([oGeo.lng, oGeo.lat]);
+      endpointCoords.push([oGeo.lng, oGeo.lat]);
       const el = makeSVGMarker('#00e5a0', true);
       const mk = new maplibregl.Marker({ element: el })
         .setLngLat([oGeo.lng, oGeo.lat])
         .setPopup(new maplibregl.Popup({ closeButton: false, offset: 14 })
-          .setHTML(`<div class="popup-route-name">Origin</div><div class="popup-detail">${origin}</div>`))
+          .setHTML(`<div class="popup-route-name">📦 Origin</div><div class="popup-detail">${origin}</div>`))
         .addTo(previewMapInst);
       previewMarkers.push(mk);
     }
 
     if (dGeo) {
-      coords.push([dGeo.lng, dGeo.lat]);
+      endpointCoords.push([dGeo.lng, dGeo.lat]);
       const el = makeSVGMarker('#005cff', true);
       const mk = new maplibregl.Marker({ element: el })
         .setLngLat([dGeo.lng, dGeo.lat])
         .setPopup(new maplibregl.Popup({ closeButton: false, offset: 14 })
-          .setHTML(`<div class="popup-route-name">Destination</div><div class="popup-detail">${dest}</div>`))
+          .setHTML(`<div class="popup-route-name">🏁 Destination</div><div class="popup-detail">${dest}</div>`))
         .addTo(previewMapInst);
       previewMarkers.push(mk);
     }
 
-    // Update route line
-    previewMapInst.getSource('route-line').setData({
-      type: 'FeatureCollection',
-      features: coords.length === 2 ? [{
-        type: 'Feature',
-        geometry: { type: 'LineString', coordinates: coords }
-      }] : []
-    });
+    if (oGeo && dGeo) {
+      // ── Use OSRM for real road route ──
+      setMapStatus('Fetching road route via OSRM…', 'loading');
+      const road = await getRoadRoute(oGeo, dGeo);
 
-    if (coords.length === 2) {
-      const bounds = coords.reduce((b, c) => b.extend(c), new maplibregl.LngLatBounds(coords[0], coords[0]));
-      previewMapInst.fitBounds(bounds, { padding: 70, maxZoom: 14, duration: 900 });
-      setMapStatus('Route preview loaded  ', 'success');
-    } else if (coords.length === 1) {
-      previewMapInst.flyTo({ center: coords[0], zoom: 12, duration: 800 });
-      setMapStatus('One location found', 'success');
+      if (road) {
+        previewMapInst.getSource('route-line').setData({
+          type: 'FeatureCollection',
+          features: [{ type: 'Feature', geometry: { type: 'LineString', coordinates: road.coords } }]
+        });
+
+        // Fit to road bounds (not just endpoints)
+        const bounds = road.coords.reduce(
+          (b, c) => b.extend(c),
+          new maplibregl.LngLatBounds(road.coords[0], road.coords[0])
+        );
+        previewMapInst.fitBounds(bounds, { padding: 60, maxZoom: 15, duration: 900 });
+
+        const km = (road.distance / 1000).toFixed(1);
+        const min = Math.round(road.duration / 60);
+        setMapStatus(`✓ Road route · ${km} km · ~${min} min driving · OSRM (free)`, 'success');
+      } else {
+        // Fallback: straight line with warning
+        previewMapInst.getSource('route-line').setData({
+          type: 'FeatureCollection',
+          features: [{ type: 'Feature', geometry: { type: 'LineString', coordinates: endpointCoords } }]
+        });
+        const bounds = endpointCoords.reduce((b, c) => b.extend(c), new maplibregl.LngLatBounds(endpointCoords[0], endpointCoords[0]));
+        previewMapInst.fitBounds(bounds, { padding: 70, maxZoom: 14, duration: 900 });
+        setMapStatus('Road routing unavailable — showing straight line', 'error');
+      }
+    } else if (endpointCoords.length === 1) {
+      previewMapInst.getSource('route-line').setData({ type: 'FeatureCollection', features: [] });
+      previewMapInst.flyTo({ center: endpointCoords[0], zoom: 12, duration: 800 });
+      setMapStatus('One location found — add a destination to see the road route', 'success');
     } else {
       setMapStatus('Could not geocode those locations — try more specific addresses', 'error');
     }
   } catch(e) {
-    setMapStatus('Geocoding failed — check network connection', 'error');
+    setMapStatus('Routing failed — check network connection', 'error');
   }
 }
 
@@ -1215,7 +1251,7 @@ async function renderAssignmentsMap(assignments) {
   ).join('');
   legendEl.style.display = 'block';
 
-  // Geocode and place markers
+  // Geocode and fetch road routes, then place markers
   const features = [];
   const allBounds = [];
 
@@ -1228,13 +1264,19 @@ async function renderAssignmentsMap(assignments) {
       const [oGeo, dGeo] = await Promise.all([geocode(route.origin), geocode(route.destination)]);
       if (!oGeo || !dGeo) return;
 
-      const coords = [[oGeo.lng, oGeo.lat], [dGeo.lng, dGeo.lat]];
+      // ── OSRM road route ──
+      const road = await getRoadRoute(oGeo, dGeo);
+      const lineCoords = road ? road.coords : [[oGeo.lng, oGeo.lat], [dGeo.lng, dGeo.lat]];
+
       features.push({
         type: 'Feature',
         properties: { color },
-        geometry: { type: 'LineString', coordinates: coords }
+        geometry: { type: 'LineString', coordinates: lineCoords }
       });
-      allBounds.push(...coords);
+      allBounds.push(...lineCoords);
+
+      const km   = road ? (road.distance / 1000).toFixed(1) : '—';
+      const mins = road ? Math.round(road.duration / 60) : '—';
 
       // Origin marker
       const oEl = makeSVGMarker(color, false);
@@ -1243,12 +1285,13 @@ async function renderAssignmentsMap(assignments) {
         .setPopup(new maplibregl.Popup({ closeButton: true, offset: 14 }).setHTML(`
           <div class="popup-route-name">${a.route_name}</div>
           <div class="popup-driver" style="color:${color}">▸ ${a.driver_name}</div>
-          <div class="popup-detail">📍 From: ${route.origin}</div>
+          <div class="popup-detail">📦 From: ${route.origin}</div>
+          <div class="popup-detail" style="margin-top:4px">${km} km · ~${mins} min</div>
         `))
         .addTo(assignMapInst);
       assignMarkers.push(oMk);
 
-      // Destination marker (slightly different style)
+      // Destination marker
       const dEl = makeSVGMarker(color, false);
       dEl.querySelector('svg circle:last-child').setAttribute('r', '2.8');
       const dMk = new maplibregl.Marker({ element: dEl })
@@ -1256,7 +1299,7 @@ async function renderAssignmentsMap(assignments) {
         .setPopup(new maplibregl.Popup({ closeButton: true, offset: 14 }).setHTML(`
           <div class="popup-route-name">${a.route_name}</div>
           <div class="popup-driver" style="color:${color}">▸ ${a.driver_name}</div>
-          <div class="popup-detail">📍 To: ${route.destination}</div>
+          <div class="popup-detail">🏁 To: ${route.destination}</div>
           <div class="popup-detail" style="margin-top:4px">${a.difficulty_score?.toFixed(1) ?? '—'} difficulty · ${route.packages ?? '?'} pkgs</div>
         `))
         .addTo(assignMapInst);
