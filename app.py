@@ -111,6 +111,10 @@ def add_route():
         "distance_km":      float(data["distance_km"]),
         "origin":           data.get("origin", ""),
         "destination":      data.get("destination", ""),
+        "origin_lat":       data.get("origin_lat", None),
+        "origin_lng":       data.get("origin_lng", None),
+        "dest_lat":         data.get("dest_lat", None),
+        "dest_lng":         data.get("dest_lng", None),
         "difficulty_score": round(score, 4),
         "assigned_to":      None,
     }
@@ -252,7 +256,4 @@ def _difficulty_label(score: float) -> str:
 
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
-    import os
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
-    
+    app.run(debug=True, port=5000)
