@@ -1,7 +1,7 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from dotenv import load_dotenv
-load_dotenv()  # loads MONGO_URI and MONGO_DB from .env
+load_dotenv()
 from scoring import compute_difficulty_score
 from balancer import assign_routes
 from models import Driver, Route
@@ -17,9 +17,8 @@ from database import (
 )
 
 app = Flask(__name__)
-CORS(app)
+CORS(app, origins="*")
 
-# Initialise DB tables on startup
 init_db()
 
 
@@ -156,9 +155,9 @@ def score_route():
     )
     score, breakdown = compute_difficulty_score(temp, return_breakdown=True)
     return jsonify({
-        "difficulty_score":  round(score, 2),
-        "breakdown":         breakdown,
-        "difficulty_label":  _difficulty_label(score),
+        "difficulty_score": round(score, 2),
+        "breakdown":        breakdown,
+        "difficulty_label": _difficulty_label(score),
     })
 
 
@@ -256,4 +255,6 @@ def _difficulty_label(score: float) -> str:
 
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
-    app.run(debug=True, port=5000)
+    import os
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port, debug=False)
