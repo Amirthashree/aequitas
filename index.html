@@ -1162,7 +1162,7 @@ async function _drawPreviewRoute(origin, dest) {
 
         const km = (road.distance / 1000).toFixed(1);
         const min = Math.round(road.duration / 60);
-        setMapStatus(`✓ Road route · ${km} km · ~${min} min driving · OSRM (free)`, 'success');
+        setMapStatus(`✓ Road route · ${km} km · ~${min} min driving `, 'success');
       } else {
         // Fallback: straight line with warning
         previewMapInst.getSource('route-line').setData({
